@@ -84,7 +84,7 @@ export default function AdminDashboard() {
             <span className="text-slate-500">
               {webmcpReady
                 ? 'WebMCP tools active — an agent can read and act on this page'
-                : "WebMCP not available in this browser — the dashboard still works normally"
+                : "WebMCP not available in this browser — the dashboard still works normally"}
             </span>
           </p>
         </div>
