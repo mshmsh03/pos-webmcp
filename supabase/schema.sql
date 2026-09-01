@@ -16,11 +16,15 @@ create table if not exists profiles (
 create or replace function handle_new_user()
 returns trigger as $$
 begin
-  insert into profiles (id, full_name, role)
+  insert into public.profiles (id, full_name, role)
   values (new.id, coalesce(new.raw_user_meta_data->>'full_name', new.email), 'cashier');
   return new;
 end;
-$$ language plpgsql security definer;
+$$ language plpgsql security definer set search_path = public;
+-- `set search_path` matters here: this function is called by Supabase's auth
+-- service (as a trigger on auth.users), not from a session where "public" is
+-- already on the search_path — without it, Postgres can't resolve the bare
+-- `profiles` name and signup fails with "Database error saving new user".
 
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
@@ -86,11 +90,12 @@ create or replace function record_sale(
 returns uuid
 language plpgsql
 security definer
+set search_path = public
 as $$
 declare
   v_sale_id uuid;
   v_item jsonb;
-  v_product products%rowtype;
+  v_product public.products%rowtype;
   v_total numeric(12, 2) := 0;
 begin
   if p_payment_method not in ('cash', 'card', 'other') then
@@ -100,7 +105,7 @@ begin
   -- Lock and validate stock for every line before writing anything.
   for v_item in select * from jsonb_array_elements(cart)
   loop
-    select * into v_product from products
+    select * into v_product from public.products
       where id = (v_item->>'product_id')::uuid
       for update;
 
@@ -116,18 +121,18 @@ begin
     v_total := v_total + (v_product.price * (v_item->>'quantity')::int);
   end loop;
 
-  insert into sales (cashier_id, total, payment_method)
+  insert into public.sales (cashier_id, total, payment_method)
   values (auth.uid(), v_total, p_payment_method)
   returning id into v_sale_id;
 
   for v_item in select * from jsonb_array_elements(cart)
   loop
-    select * into v_product from products where id = (v_item->>'product_id')::uuid;
+    select * into v_product from public.products where id = (v_item->>'product_id')::uuid;
 
-    insert into sale_items (sale_id, product_id, product_name, quantity, unit_price)
+    insert into public.sale_items (sale_id, product_id, product_name, quantity, unit_price)
     values (v_sale_id, v_product.id, v_product.name, (v_item->>'quantity')::int, v_product.price);
 
-    update products
+    update public.products
       set stock = stock - (v_item->>'quantity')::int, updated_at = now()
       where id = v_product.id;
   end loop;
@@ -150,9 +155,10 @@ returns boolean
 language sql
 security definer
 stable
+set search_path = public
 as $$
   select exists (
-    select 1 from profiles where id = auth.uid() and role = 'admin'
+    select 1 from public.profiles where id = auth.uid() and role = 'admin'
   );
 $$;
 
