@@ -17,16 +17,18 @@ With WebMCP, they can just ask an agent — the agent calls a tool this page
 registered, gets a real answer from the live database, and the owner sees it
 happen on screen at the same time.
 
-Four tools are registered on `/admin`:
+Five tools are registered on `/admin`, and one more on the cashier register
+at `/pos`:
 
-| Tool | Read/write | What it does |
-|---|---|---|
-| `get_sales_summary` | read-only | Revenue, cash/card/other split, transaction count for today / 7 days / 30 days |
-| `get_low_stock_alerts` | read-only | Every product at or below its restock threshold |
-| `find_product` | read-only | Search the catalog by name, get price and stock |
-| `log_expense` | **write** | Records one expense line. The only thing an agent can ever change on this page. |
+| Tool | Where | Read/write | What it does |
+|---|---|---|---|
+| `get_sales_summary` | `/admin` | read-only | Revenue, cash/card/other split, transaction count for today / 7 days / 30 days |
+| `get_low_stock_alerts` | `/admin` | read-only | Every product at or below its restock threshold |
+| `get_financial_summary` | `/admin` | read-only | Revenue, expenses, and net for a given period — "are we actually making money" |
+| `find_product` | `/admin` and `/pos` | read-only | Search the catalog by name, get price and stock |
+| `log_expense` | `/admin` | **write** | Records one expense line. The only thing an agent can ever change, anywhere in this app. |
 
-Three tools are read-only on purpose, and the one write tool can only ever
+Everything is read-only except `log_expense`, and that one tool can only ever
 *add* an expense — never touch a sale, stock, or an account. This page is a
 public demo URL; anyone's agent could call these tools, so the blast radius
 of a mistake (or a malicious call) is capped at "one extra expense row,"
@@ -38,6 +40,12 @@ Every tool calls the *same* query functions (`lib/queries.js`) that render
 the dashboard UI. There's one source of truth for the numbers — a human
 looking at the screen and an agent calling a tool are never looking at two
 different code paths.
+
+Every call any tool makes — read or write, success or failure — is also
+written to a `tool_calls` table and shown in a "recent agent activity" panel
+on `/admin`, visible only to admins. It's a durable audit trail of exactly
+what an agent asked and got back, not just a banner that disappears on the
+next page load.
 
 ## Stack
 
@@ -113,8 +121,10 @@ never assumed).
 
 ## Known limitations
 
-- "Today" is a UTC day boundary, not your local day — fine for a demo, worth
-  fixing with a timezone-aware query before any real shop relies on it.
+- "Today" uses the viewer's own local clock (the browser's timezone), not a
+  timezone configured per-shop — correct for a single shop owner checking
+  their own dashboard, but would need a stored shop timezone before this
+  supported multiple locations.
 - No real card processing — `card` is just a logged label; you still need a
   physical card terminal alongside this.
 - Staff accounts are created by signing up and then having an admin flip the

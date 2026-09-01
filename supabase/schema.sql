@@ -79,6 +79,21 @@ create table if not exists expenses (
   created_at timestamptz not null default now()
 );
 
+-- 6b. tool_calls ---------------------------------------------------------------
+-- Every WebMCP tool invocation gets a row here, not just the write ones — a
+-- full audit trail of what an agent asked and what it got back, visible only
+-- to admins. This is what backs the "recent agent activity" panel on the
+-- admin dashboard.
+create table if not exists tool_calls (
+  id uuid primary key default gen_random_uuid(),
+  tool_name text not null,
+  input jsonb not null default '{}'::jsonb,
+  result jsonb,
+  success boolean not null default true,
+  called_by uuid references profiles(id),
+  created_at timestamptz not null default now()
+);
+
 -- 7. record_sale() — atomic checkout ------------------------------------------
 -- Takes the cart as JSON: [{ "product_id": "...", "quantity": 2 }, ...]
 -- Inserts the sale + line items and decrements stock in one transaction,
@@ -148,6 +163,7 @@ alter table products enable row level security;
 alter table sales enable row level security;
 alter table sale_items enable row level security;
 alter table expenses enable row level security;
+alter table tool_calls enable row level security;
 
 -- Helper: is the current user an admin?
 create or replace function is_admin()
@@ -198,6 +214,13 @@ create policy "sale_items_select_via_sale" on sale_items
 -- expenses: admin only, full stop
 create policy "expenses_admin_only" on expenses
   for all using (is_admin()) with check (is_admin());
+
+-- tool_calls: any signed-in user (cashier or admin) can log a call they made
+-- themselves; only admins can read the audit trail back.
+create policy "tool_calls_insert_own" on tool_calls
+  for insert with check (called_by = auth.uid());
+create policy "tool_calls_select_admin" on tool_calls
+  for select using (is_admin());
 
 -- 9. Seed data (generic — swap for a real client's data later) ----------------
 insert into categories (name) values ('Category A'), ('Category B'), ('Category C')

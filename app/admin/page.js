@@ -4,27 +4,30 @@ import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
-import { getSalesSummary, getLowStockAlerts, getRecentSales } from '../../lib/queries';
-import { registerPosTools, isWebMCPSupported } from '../../lib/webmcpTools';
+import { getSalesSummary, getLowStockAlerts, getRecentSales, getRecentToolCalls } from '../../lib/queries';
+import { registerAdminTools, isWebMCPSupported } from '../../lib/webmcpTools';
 
 export default function AdminDashboard() {
   const router = useRouter();
   const [summary, setSummary] = useState(null);
   const [lowStock, setLowStock] = useState([]);
   const [recentSales, setRecentSales] = useState([]);
+  const [activity, setActivity] = useState([]);
   const [loading, setLoading] = useState(true);
   const [webmcpReady, setWebmcpReady] = useState(false);
   const [lastToolCall, setLastToolCall] = useState(null);
 
   const refresh = useCallback(async () => {
-    const [s, low, recent] = await Promise.all([
+    const [s, low, recent, calls] = await Promise.all([
       getSalesSummary('today'),
       getLowStockAlerts(),
       getRecentSales(8),
+      getRecentToolCalls(8).catch(() => []), // admin-only table; swallow if role hasn't propagated yet
     ]);
     setSummary(s);
     setLowStock(low);
     setRecentSales(recent);
+    setActivity(calls);
   }, []);
 
   useEffect(() => {
@@ -40,7 +43,7 @@ export default function AdminDashboard() {
     let unregister = () => {};
 
     (async () => {
-      const { supported, unregister: cleanup } = await registerPosTools((name, input, result) => {
+      const { supported, unregister: cleanup } = await registerAdminTools((name, input, result) => {
         setLastToolCall({ name, input, result, at: new Date() });
         // Whatever the agent just looked at or changed, refresh the human's
         // view of it too — this is the "visible tool calls" principle from
@@ -81,7 +84,7 @@ export default function AdminDashboard() {
             <span className="text-slate-500">
               {webmcpReady
                 ? 'WebMCP tools active — an agent can read and act on this page'
-                : "WebMCP not available in this browser — the dashboard still works normally"}
+                : "WebMCP not available in this browser — the dashboard still works normally"
             </span>
           </p>
         </div>
@@ -155,6 +158,36 @@ export default function AdminDashboard() {
             </ul>
           )}
         </div>
+      </section>
+
+      <section className="mt-4 rounded-lg border border-line bg-surface p-4">
+        <h2 className="mb-3 text-sm font-medium text-slate-600">Recent agent activity</h2>
+        {activity.length === 0 ? (
+          <p className="text-sm text-slate-400">
+            No tool calls yet — every WebMCP call an agent makes, read or write, shows up here.
+          </p>
+        ) : (
+          <ul className="space-y-2 text-sm">
+            {activity.map((call) => (
+              <li key={call.id} className="flex items-center justify-between gap-3">
+                <span className="flex items-center gap-2">
+                  <span
+                    className={`inline-block h-1.5 w-1.5 rounded-full ${
+                      call.success ? 'bg-emerald-500' : 'bg-red-500'
+                    }`}
+                  />
+                  <code className="font-mono text-xs text-ink">{call.tool_name}</code>
+                  {call.input && Object.keys(call.input).length > 0 && (
+                    <span className="text-xs text-slate-400">{JSON.stringify(call.input)}</span>
+                  )}
+                </span>
+                <span className="shrink-0 text-xs text-slate-400">
+                  {new Date(call.created_at).toLocaleTimeString()}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
     </main>
   );

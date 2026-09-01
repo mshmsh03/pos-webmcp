@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { getAllProducts } from '../../lib/queries';
+import { registerCashierTools } from '../../lib/webmcpTools';
 
 export default function PosPage() {
   const router = useRouter();
@@ -12,9 +13,25 @@ export default function PosPage() {
   const [loading, setLoading] = useState(true);
   const [checkingOut, setCheckingOut] = useState(false);
   const [message, setMessage] = useState('');
+  const [webmcpReady, setWebmcpReady] = useState(false);
 
   useEffect(() => {
     load();
+  }, []);
+
+  // WebMCP: the register gets one read-only tool (find_product) — a cashier
+  // mid-sale can have an agent check a price or stock level without leaving
+  // this screen. No write tools here; record_sale() stays a human action.
+  useEffect(() => {
+    let unregister = () => {};
+
+    (async () => {
+      const { supported, unregister: cleanup } = await registerCashierTools();
+      setWebmcpReady(supported);
+      unregister = cleanup;
+    })();
+
+    return () => unregister();
   }, []);
 
   async function load() {
@@ -75,7 +92,19 @@ export default function PosPage() {
   return (
     <main className="min-h-screen bg-ground p-4 md:p-6">
       <header className="mb-4 flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-ink">Cashier</h1>
+        <div>
+          <h1 className="text-lg font-semibold text-ink">Cashier</h1>
+          <p className="mt-1 flex items-center gap-2 text-xs">
+            <span
+              className={`inline-block h-2 w-2 rounded-full ${
+                webmcpReady ? 'bg-emerald-500' : 'bg-slate-300'
+              }`}
+            />
+            <span className="text-slate-500">
+              {webmcpReady ? 'Price/stock lookup tool active for agents' : 'WebMCP not available in this browser'}
+            </span>
+          </p>
+        </div>
         <button onClick={signOut} className="text-xs text-slate-500 underline">
           Sign out
         </button>
