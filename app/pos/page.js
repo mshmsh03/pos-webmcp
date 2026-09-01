@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { getAllProducts } from '../../lib/queries';
+import { createCartApi } from '../../lib/cart';
 import { registerCashierTools } from '../../lib/webmcpTools';
 
 export default function PosPage() {
@@ -14,25 +15,73 @@ export default function PosPage() {
   const [checkingOut, setCheckingOut] = useState(false);
   const [message, setMessage] = useState('');
   const [webmcpReady, setWebmcpReady] = useState(false);
+  const [agentAction, setAgentAction] = useState(null);
+
+  // The WebMCP tools are registered once, on mount, but they need to read and
+  // write cart/product state that changes constantly. Closing over `cart`
+  // directly would freeze it at whatever it was on mount, so the tools go
+  // through refs instead — and every mutation writes the ref *before* calling
+  // setCart, so an agent firing several add_to_cart calls in a row doesn't
+  // read stale state between React renders.
+  const productsRef = useRef([]);
+  const cartRef = useRef([]);
+
+  useEffect(() => {
+    productsRef.current = products;
+  }, [products]);
+
+  useEffect(() => {
+    cartRef.current = cart;
+  }, [cart]);
 
   useEffect(() => {
     load();
   }, []);
 
-  // WebMCP: the register gets one read-only tool (find_product) — a cashier
-  // mid-sale can have an agent check a price or stock level without leaving
-  // this screen. No write tools here; record_sale() stays a human action.
+  // --------------------------------------------------------------------------
+  // The cart API handed to the WebMCP layer.
+  //
+  // This is the part an ordinary MCP server physically cannot do: the cart is
+  // browser state. It has never been near the database and won't be until a
+  // human presses Cash/Card/Other. An agent can assemble an order the cashier
+  // watches appear on screen, and can be wrong about it harmlessly, because
+  // nothing it touches here is persistent.
+  //
+  // There is deliberately no checkout function exposed. Taking money stays a
+  // human action.
+  // --------------------------------------------------------------------------
+  const cartApi = useMemo(
+    () =>
+      createCartApi({
+        getProducts: () => productsRef.current,
+        getCart: () => cartRef.current,
+        setCart: (next) => {
+          // Write the ref first: an agent firing several add_to_cart calls in a
+          // row must not read stale state between React renders.
+          cartRef.current = next;
+          setCart(next);
+        },
+      }),
+    []
+  );
+
+  // WebMCP: the register exposes a read-only catalog lookup plus the cart
+  // tools above. Registration is feature-detected — with no WebMCP in the
+  // browser this is a no-op and the register behaves exactly as it always did.
   useEffect(() => {
     let unregister = () => {};
 
     (async () => {
-      const { supported, unregister: cleanup } = await registerCashierTools();
+      const { supported, unregister: cleanup } = await registerCashierTools(
+        (name, input) => setAgentAction({ name, input, at: new Date() }),
+        cartApi
+      );
       setWebmcpReady(supported);
       unregister = cleanup;
     })();
 
     return () => unregister();
-  }, []);
+  }, [cartApi]);
 
   async function load() {
     setLoading(true);
@@ -47,17 +96,22 @@ export default function PosPage() {
   function addToCart(product) {
     setCart((prev) => {
       const existing = prev.find((line) => line.product.id === product.id);
-      if (existing) {
-        return prev.map((line) =>
-          line.product.id === product.id ? { ...line, quantity: line.quantity + 1 } : line
-        );
-      }
-      return [...prev, { product, quantity: 1 }];
+      const next = existing
+        ? prev.map((line) =>
+            line.product.id === product.id ? { ...line, quantity: line.quantity + 1 } : line
+          )
+        : [...prev, { product, quantity: 1 }];
+      cartRef.current = next;
+      return next;
     });
   }
 
   function removeFromCart(productId) {
-    setCart((prev) => prev.filter((line) => line.product.id !== productId));
+    setCart((prev) => {
+      const next = prev.filter((line) => line.product.id !== productId);
+      cartRef.current = next;
+      return next;
+    });
   }
 
   const total = cart.reduce((sum, line) => sum + line.product.price * line.quantity, 0);
@@ -74,7 +128,9 @@ export default function PosPage() {
       });
       if (error) throw error;
 
+      cartRef.current = [];
       setCart([]);
+      setAgentAction(null);
       setMessage(`Sale recorded — paid by ${paymentMethod}.`);
       await load();
     } catch (err) {
@@ -101,7 +157,9 @@ export default function PosPage() {
               }`}
             />
             <span className="text-slate-500">
-              {webmcpReady ? 'Price/stock lookup tool active for agents' : 'WebMCP not available in this browser'}
+              {webmcpReady
+                ? 'Agent tools active — an agent can build this cart, only you can take payment'
+                : 'WebMCP not available in this browser'}
             </span>
           </p>
         </div>
@@ -109,6 +167,21 @@ export default function PosPage() {
           Sign out
         </button>
       </header>
+
+      {agentAction && (
+        <div className="mb-4 flex items-center gap-2 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
+          <span>
+            Agent called <span className="font-medium">{agentAction.name}</span>
+            {agentAction.input && Object.keys(agentAction.input).length > 0 && (
+              <span className="text-emerald-700"> {JSON.stringify(agentAction.input)}</span>
+            )}
+          </span>
+          <span className="ml-auto text-emerald-600">
+            {agentAction.at.toLocaleTimeString()}
+          </span>
+        </div>
+      )}
 
       <div className="grid gap-4 md:grid-cols-[1fr_320px]">
         <section className="rounded-lg border border-line bg-surface p-4">
@@ -177,6 +250,10 @@ export default function PosPage() {
               </button>
             ))}
           </div>
+
+          <p className="mt-3 text-[11px] leading-relaxed text-slate-400">
+            Payment is a human action. No agent tool can record a sale.
+          </p>
 
           {message && <p className="mt-3 text-xs text-slate-500">{message}</p>}
         </aside>
