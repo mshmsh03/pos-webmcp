@@ -306,9 +306,11 @@ either way — `document.modelContext` is feature-detected, never assumed.
   role in Supabase's Table Editor — deliberate, no self-serve admin signup.
 - Supabase's free tier pauses a project after roughly a week of low activity,
   and a paused project does **not** wake on the next request — it has to be
-  resumed by hand from the Supabase dashboard. A handful of database requests a
-  day is enough to prevent it, so anything long-lived should either sit on a
-  paid plan or be kept warm by a scheduled request.
+  resumed by hand from the dashboard. `app/api/keep-alive/route.js` makes one
+  real database query, and `vercel.json` calls it on a daily cron, which is
+  enough to prevent it. Note that pinging the site itself would not work: every
+  page here is client-rendered, so fetching the HTML never touches Postgres from
+  the server side.
 
 ## License
 
