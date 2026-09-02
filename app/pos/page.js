@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { getAllProducts } from '../../lib/queries';
@@ -10,7 +11,7 @@ import { useRoleGuard } from '../../lib/useRoleGuard';
 
 export default function PosPage() {
   const router = useRouter();
-  const { status: guard } = useRoleGuard('any');
+  const { status: guard, role } = useRoleGuard('any');
   const [products, setProducts] = useState([]);
   const [cart, setCart] = useState([]); // [{ product, quantity }]
   const [loading, setLoading] = useState(true);
@@ -197,9 +198,19 @@ export default function PosPage() {
             </span>
           </p>
         </div>
-        <button onClick={signOut} className="text-xs text-slate-500 underline">
-          Sign out
-        </button>
+        <nav className="flex items-center gap-4 text-xs">
+          {/* Only admins get this: a cashier following it would just be
+              bounced back by the route guard, so offering it would be a dead
+              end rather than navigation. */}
+          {role === 'admin' && (
+            <Link href="/admin" className="text-accent underline">
+              ← Dashboard
+            </Link>
+          )}
+          <button onClick={signOut} className="text-slate-500 underline">
+            Sign out
+          </button>
+        </nav>
       </header>
 
       {agentAction && (
