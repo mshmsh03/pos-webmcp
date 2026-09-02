@@ -12,10 +12,10 @@ export default function RootPage() {
     let cancelled = false;
 
     async function go() {
-      const { data } = await supabase.auth.getUser();
+      const { data } = await supabase.auth.getSession();
       if (cancelled) return;
 
-      if (!data?.user) {
+      if (!data?.session?.user) {
         router.replace('/login');
         return;
       }
