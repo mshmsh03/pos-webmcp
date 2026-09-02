@@ -18,6 +18,7 @@ export default function PosPage() {
   const [message, setMessage] = useState('');
   const [webmcpReady, setWebmcpReady] = useState(false);
   const [agentAction, setAgentAction] = useState(null);
+  const [loadError, setLoadError] = useState('');
 
   // The WebMCP tools are registered once, on mount, but they need to read and
   // write cart/product state that changes constantly. Closing over `cart`
@@ -38,7 +39,7 @@ export default function PosPage() {
 
   useEffect(() => {
     if (guard !== 'allowed') return;
-    load();
+    load().catch(() => {});
   }, [guard]);
 
   // --------------------------------------------------------------------------
@@ -73,18 +74,34 @@ export default function PosPage() {
   // browser this is a no-op and the register behaves exactly as it always did.
   useEffect(() => {
     if (guard !== 'allowed') return undefined;
+    let cancelled = false;
     let unregister = () => {};
 
     (async () => {
-      const { supported, unregister: cleanup } = await registerCashierTools(
-        (name, input) => setAgentAction({ name, input, at: new Date() }),
-        cartApi
-      );
-      setWebmcpReady(supported);
-      unregister = cleanup;
+      try {
+        const { supported, unregister: cleanup } = await registerCashierTools(
+          (name, input) => setAgentAction({ name, input, at: new Date() }),
+          cartApi
+        );
+        // If the effect already tore down while we were awaiting, the returned
+        // cleanup would otherwise be dropped on the floor and the tools would
+        // stay registered on document.modelContext after unmount. React strict
+        // mode double-mounts, so this window is hit on every dev mount.
+        if (cancelled) {
+          cleanup();
+          return;
+        }
+        setWebmcpReady(supported);
+        unregister = cleanup;
+      } catch (err) {
+        console.error('WebMCP registration failed:', err?.message || err);
+      }
     })();
 
-    return () => unregister();
+    return () => {
+      cancelled = true;
+      unregister();
+    };
   }, [cartApi, guard]);
 
   async function load() {
@@ -92,22 +109,26 @@ export default function PosPage() {
     try {
       const data = await getAllProducts();
       setProducts(data);
+      setLoadError('');
+    } catch (err) {
+      setLoadError(err?.message || 'Could not load the product catalogue.');
+      throw err;
     } finally {
       setLoading(false);
     }
   }
 
+  // The human path deliberately goes through the same cart rules the agent
+  // uses. It previously only checked stock > 0, so a cashier could stack five
+  // of a stock-two item and only find out at the till — the agent was better
+  // behaved than the person, and the tested rules were bypassed entirely.
   function addToCart(product) {
-    setCart((prev) => {
-      const existing = prev.find((line) => line.product.id === product.id);
-      const next = existing
-        ? prev.map((line) =>
-            line.product.id === product.id ? { ...line, quantity: line.quantity + 1 } : line
-          )
-        : [...prev, { product, quantity: 1 }];
-      cartRef.current = next;
-      return next;
-    });
+    try {
+      cartApi.addProduct(product, 1);
+      setMessage('');
+    } catch (err) {
+      setMessage(err.message);
+    }
   }
 
   function removeFromCart(productId) {
@@ -136,11 +157,20 @@ export default function PosPage() {
       setCart([]);
       setAgentAction(null);
       setMessage(`Sale recorded — paid by ${paymentMethod}.`);
-      await load();
     } catch (err) {
       setMessage(`Error: ${err.message}`);
     } finally {
       setCheckingOut(false);
+    }
+
+    // Deliberately outside the try. The sale is already committed by this
+    // point, so letting a failed catalog refresh overwrite the success message
+    // with "Error: …" would tell the cashier the sale failed when it didn't —
+    // and the natural response to that is to ring it up a second time.
+    try {
+      await load();
+    } catch {
+      /* stock figures are stale until the next refresh; the sale still stands */
     }
   }
 
@@ -192,6 +222,21 @@ export default function PosPage() {
           <h2 className="mb-3 text-sm font-medium text-slate-600">Products</h2>
           {loading ? (
             <p className="text-sm text-slate-400">Loading…</p>
+          ) : loadError ? (
+            // An empty grid used to be shown for both "no products" and "the
+            // query failed", which tells a cashier the shop has no stock when
+            // in fact the request errored.
+            <div className="flex flex-col items-start gap-2">
+              <p className="text-sm text-slate-600">{loadError}</p>
+              <button
+                onClick={() => load().catch(() => {})}
+                className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white"
+              >
+                Try again
+              </button>
+            </div>
+          ) : products.length === 0 ? (
+            <p className="text-sm text-slate-400">No products in the catalogue yet.</p>
           ) : (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
               {products.map((p) => (

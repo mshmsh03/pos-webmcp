@@ -34,15 +34,28 @@ export default function ProductsPage() {
     productsRef.current = products;
   }, [products]);
 
+  // Cleared on unmount, and re-set on each save, so rapid consecutive edits
+  // don't have an older timer wipe a newer "saved" badge.
+  const savedTimer = useRef(null);
+  useEffect(() => () => clearTimeout(savedTimer.current), []);
+
   useEffect(() => {
     if (guard !== 'allowed') return;
-    load();
+    load().catch(() => {});
   }, [guard]);
+
+  // Bumping this remounts the filter inputs. They're uncontrolled (the
+  // declarative tool submits the form, so the DOM owns their values), which
+  // meant "Clear" reset the table but left the old text sitting in the box.
+  const [filterFormKey, setFilterFormKey] = useState(0);
 
   async function load() {
     setLoading(true);
     try {
       setProducts(await getAllProducts());
+      setError('');
+    } catch (err) {
+      setError(err?.message || 'Could not load products.');
     } finally {
       setLoading(false);
     }
@@ -53,7 +66,8 @@ export default function ProductsPage() {
     try {
       await updateProduct(id, { [field]: value });
       setSavedId(`${id}:${field}`);
-      setTimeout(() => setSavedId(null), 1200);
+      clearTimeout(savedTimer.current);
+      savedTimer.current = setTimeout(() => setSavedId(null), 1200);
       await load();
     } catch (err) {
       setError(err.message);
@@ -163,6 +177,7 @@ export default function ProductsPage() {
       )}
 
       <form
+        key={filterFormKey}
         onSubmit={handleFilterSubmit}
         toolname="filter_product_list"
         tooldescription="Filter the product table the shop owner is currently looking at, by name and/or to just the items that need restocking. This changes what is displayed on their screen. It only reads product data — it never changes a product, a price, or a stock level."
@@ -198,6 +213,7 @@ export default function ProductsPage() {
             onClick={() => {
               setFilter({ name: '', lowStockOnly: false });
               setAgentAction(null);
+              setFilterFormKey((k) => k + 1);
             }}
             className="text-xs text-slate-500 underline"
           >

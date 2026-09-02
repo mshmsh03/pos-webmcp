@@ -21,12 +21,22 @@ export default function LoginPage() {
 
     try {
       if (mode === 'sign-up') {
-        const { error: signUpError } = await supabase.auth.signUp({
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
           email,
           password,
           options: { data: { full_name: fullName } },
         });
         if (signUpError) throw signUpError;
+
+        // If the project has email confirmation switched on, signUp succeeds
+        // with no session. Without this the code redirected anyway, the route
+        // guard bounced straight back, and the user saw the form flash with no
+        // explanation of what happened.
+        if (!signUpData?.session) {
+          setError('Account created. Check your email to confirm it, then sign in.');
+          setMode('sign-in');
+          return;
+        }
       } else {
         const { error: signInError } = await supabase.auth.signInWithPassword({
           email,

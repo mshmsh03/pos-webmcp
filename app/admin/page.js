@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { getSalesSummary, getLowStockAlerts, getRecentSales, getRecentToolCalls } from '../../lib/queries';
-import { registerAdminTools, isWebMCPSupported } from '../../lib/webmcpTools';
+import { registerAdminTools } from '../../lib/webmcpTools';
 import { useRoleGuard } from '../../lib/useRoleGuard';
 
 export default function AdminDashboard() {
@@ -18,6 +18,7 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [webmcpReady, setWebmcpReady] = useState(false);
   const [lastToolCall, setLastToolCall] = useState(null);
+  const [loadError, setLoadError] = useState('');
 
   const refresh = useCallback(async () => {
     const [s, low, recent, calls] = await Promise.all([
@@ -36,8 +37,16 @@ export default function AdminDashboard() {
     if (guard !== 'allowed') return;
     (async () => {
       setLoading(true);
-      await refresh();
-      setLoading(false);
+      try {
+        await refresh();
+        setLoadError('');
+      } catch (err) {
+        // Without this, the throw skipped setLoading(false) and the page sat on
+        // "Loading…" forever — no error, no way back, on any single failed query.
+        setLoadError(err?.message || 'Could not load the dashboard.');
+      } finally {
+        setLoading(false);
+      }
     })();
   }, [refresh, guard]);
 
@@ -54,7 +63,7 @@ export default function AdminDashboard() {
         // Whatever the agent just looked at or changed, refresh the human's
         // view of it too — this is the "visible tool calls" principle from
         // the WebMCP spec in practice.
-        refresh();
+        refresh().catch(() => {});
       });
       setWebmcpReady(supported);
       unregister = cleanup;
@@ -72,6 +81,26 @@ export default function AdminDashboard() {
     return (
       <main className="flex min-h-screen items-center justify-center bg-ground">
         <p className="text-sm text-slate-400">Loading…</p>
+      </main>
+    );
+  }
+
+  if (loadError || !summary) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center gap-3 bg-ground p-6">
+        <p className="text-sm text-slate-600">{loadError || 'Could not load the dashboard.'}</p>
+        <button
+          onClick={() => {
+            setLoading(true);
+            refresh()
+              .then(() => setLoadError(''))
+              .catch((err) => setLoadError(err?.message || 'Could not load the dashboard.'))
+              .finally(() => setLoading(false));
+          }}
+          className="rounded bg-accent px-4 py-2 text-xs font-medium text-white"
+        >
+          Try again
+        </button>
       </main>
     );
   }
@@ -120,10 +149,13 @@ export default function AdminDashboard() {
         </div>
       )}
 
-      <section className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+      <section className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-5">
         <Stat label="Revenue today" value={summary.revenue.toLocaleString()} />
         <Stat label="Cash" value={summary.cash.toLocaleString()} />
         <Stat label="Card" value={summary.card.toLocaleString()} />
+        {/* Without this tile a sale taken as "other" left Cash + Card visibly
+            short of Revenue, with nothing on screen explaining the gap. */}
+        <Stat label="Other" value={summary.other.toLocaleString()} />
         <Stat label="Transactions" value={summary.transactionCount} />
       </section>
 

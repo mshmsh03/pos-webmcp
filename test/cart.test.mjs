@@ -194,6 +194,29 @@ check('every response tells the agent it has not sold anything', () => {
   }
 });
 
+check('addProduct applies the same stock rule the cashier UI now goes through', () => {
+  const { api } = fresh();
+  const sandwich = PRODUCTS.find((p) => p.name === 'Sandwich'); // stock 2
+  api.addProduct(sandwich, 2);
+  // The tile-click path used to bypass this entirely and only fail at the till.
+  throws(() => api.addProduct(sandwich, 1), 'already in the cart');
+});
+
+check('addProduct rejects a sold-out product', () => {
+  const { api } = fresh();
+  throws(() => api.addProduct(PRODUCTS.find((p) => p.name === 'Sold Out Cake'), 1), 'only 0');
+});
+
+check('addProduct and add() agree — one set of rules, two entry points', () => {
+  const a = fresh();
+  const b = fresh();
+  const viaName = a.api.add('Coffee', 3);
+  const viaObject = b.api.addProduct(PRODUCTS.find((p) => p.name === 'Coffee'), 3);
+  assert(viaName.total === viaObject.total, 'totals differ');
+  assert(viaName.item_count === viaObject.item_count, 'counts differ');
+  assert(viaName.added === viaObject.added, `added differs: ${viaName.added} vs ${viaObject.added}`);
+});
+
 check('sequential adds do not lose earlier items', () => {
   const { api } = fresh();
   api.add('Coffee', 2);

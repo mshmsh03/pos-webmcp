@@ -12,13 +12,38 @@ export default function ReportsPage() {
   const [expense, setExpense] = useState({ description: '', amount: '', category: 'general' });
   const [message, setMessage] = useState('');
 
+  // `cancelled` keeps a slow response for an earlier period from landing after
+  // a later one — clicking 7d then 30d could otherwise leave figures that don't
+  // match the highlighted button.
   useEffect(() => {
-    if (guard !== 'allowed') return;
-    load(period);
+    if (guard !== 'allowed') return undefined;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const next = await getReportsData(period);
+        if (!cancelled) {
+          setData(next);
+          setMessage('');
+        }
+      } catch (err) {
+        // Previously this left `data` null, so the whole figures block simply
+        // wasn't rendered: no revenue, no error, no explanation.
+        if (!cancelled) setMessage(`Could not load reports: ${err.message}`);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [period, guard]);
 
   async function load(p) {
-    setData(await getReportsData(p));
+    try {
+      setData(await getReportsData(p));
+    } catch (err) {
+      setMessage(`Could not load reports: ${err.message}`);
+    }
   }
 
   async function addExpense(e) {
@@ -27,7 +52,9 @@ export default function ReportsPage() {
       await logExpense(expense.description, Number(expense.amount), expense.category);
       setExpense({ description: '', amount: '', category: 'general' });
       setMessage('Expense logged.');
-      load(period);
+      // Awaited so a failure here is caught rather than escaping as an
+      // unhandled rejection while the figures silently go stale.
+      await load(period);
     } catch (err) {
       setMessage(`Error: ${err.message}`);
     }

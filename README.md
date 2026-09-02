@@ -32,6 +32,36 @@ Two things follow from that, and they're the whole argument for the spec:
 - **The human is in the room.** Every tool call lands on a screen someone is
   watching. That's not a limitation to work around; it's the safety model.
 
+```mermaid
+flowchart TB
+    AGENT(["🤖 Agent<br/>'ring up two coffees'"])
+    HUMAN(["👤 Cashier"])
+
+    subgraph TAB["One browser tab · the cashier's own signed-in session"]
+        TOOLS["WebMCP tools<br/><code>document.modelContext</code>"]
+        CART["🛒 Cart<br/><i>React state — exists only here</i>"]
+        SCREEN["Register on screen"]
+    end
+
+    DB[("Postgres · Row Level Security<br/>sales · stock · expenses")]
+
+    AGENT -->|calls| TOOLS
+    TOOLS -->|"builds the order"| CART
+    CART --> SCREEN
+    SCREEN -.->|"watches it happen"| HUMAN
+    TOOLS -->|"reads · one write: log_expense"| DB
+    HUMAN ==>|"presses Cash — the only route to money"| DB
+
+    classDef blocked stroke-dasharray: 5 5
+    AGENT -.- NOPE["✕ no checkout tool exists"]:::blocked
+    NOPE -.- DB
+```
+
+The dashed line is the point: there is no path from the agent to the money. It
+can fill the cart the cashier is looking at, and it can be wrong about it
+harmlessly, because nothing it touches is persistent until a person presses a
+button.
+
 ## The tools
 
 Ten tools across three pages, using **both** of WebMCP's APIs — nine registered
@@ -114,6 +144,36 @@ the permissions of the human whose session it is borrowing**, because it is
 that human's session, and the tool list is derived from it rather than
 defended after the fact.
 
+### What holds when the client is hostile
+
+The tiers above describe what an agent is *offered*. None of it is load-bearing
+on its own: the client is a browser holding a public anon key, so every rule
+that matters is enforced in Postgres, where a crafted HTTP request can't route
+around it.
+
+- **Row Level Security on all seven tables.** A cashier reads their own sales
+  and the product catalogue; expenses and the audit trail are admin-only; sales
+  can only be created through `record_sale()`.
+- **Role is not self-writable.** The profiles update policy carries an explicit
+  `WITH CHECK` pinning `role` to its stored value. Omitting it would be quietly
+  fatal — Postgres reuses the `USING` clause as the check, which constrains
+  which *row* you may write but not which *columns*, and every other boundary
+  in the schema is downstream of that one column.
+- **`record_sale()` is authenticated-only.** It's `SECURITY DEFINER`, so it
+  bypasses RLS by design and must do its own authorization; `EXECUTE` is
+  revoked from `public` and `anon` so the anon key alone can't reach it.
+- **It validates rather than trusting CHECK constraints to catch things.**
+  Quantities must be positive whole numbers (a negative one would pass a
+  `stock <` test and then *add* inventory); duplicate lines for the same product
+  are summed before the stock check, so a cart of `[X:40, X:40]` can't pass
+  validation twice against stock 40; rows are locked with `SELECT … FOR UPDATE`
+  in sorted product order, which both prevents the last-item race and stops two
+  concurrent checkouts deadlocking on opposite orderings.
+- **Prices come from the database, never the request.**
+
+`supabase/migrations/` carries these as a migration for databases created from
+an earlier copy of the schema.
+
 ### One source of truth, and a receipt for everything
 
 Every tool calls the same query functions in `lib/queries.js` that render the
@@ -135,7 +195,7 @@ working rather than watching the cart change by itself.
 
 The cart rules — stock limits, ambiguous product names, quantity validation —
 live in `lib/cart.js`, deliberately free of React so they can be tested
-directly. `npm test` runs 21 assertions against them, no test framework
+directly. `npm test` runs 24 assertions against them, no test framework
 required.
 
 ## Setup — from zero to a working deploy
