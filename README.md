@@ -304,8 +304,11 @@ either way — `document.modelContext` is feature-detected, never assumed.
   physical card terminal alongside this.
 - Staff accounts are created by signing up and then having an admin flip the
   role in Supabase's Table Editor — deliberate, no self-serve admin signup.
-- Supabase's free tier pauses a project after a week with no traffic (wakes
-  automatically on the next request, a few seconds' delay).
+- Supabase's free tier pauses a project after roughly a week of low activity,
+  and a paused project does **not** wake on the next request — it has to be
+  resumed by hand from the Supabase dashboard. A handful of database requests a
+  day is enough to prevent it, so anything long-lived should either sit on a
+  paid plan or be kept warm by a scheduled request.
 
 ## License
 
