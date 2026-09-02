@@ -223,17 +223,24 @@ create policy "tool_calls_select_admin" on tool_calls
   for select using (is_admin());
 
 -- 9. Seed data (generic — swap for a real client's data later) ----------------
-insert into categories (name) values ('Category A'), ('Category B'), ('Category C')
+-- Seed data. Deliberately a small café's worth of real-sounding items rather
+-- than "Sample Item 1" — a POS with placeholder names is hard to evaluate and
+-- impossible to demo out loud. Replace these with your own catalogue; nothing
+-- in the app depends on them. Two items start below their restock threshold so
+-- the low-stock alerts have something to show on first load.
+insert into categories (name) values ('Drinks'), ('Food'), ('Retail')
   on conflict do nothing;
 
 insert into products (name, category_id, price, stock, low_stock_threshold)
-select 'Sample Item 1', id, 2500, 40, 10 from categories where name = 'Category A'
+select 'Coffee', id, 2500, 40, 10 from categories where name = 'Drinks'
 union all
-select 'Sample Item 2', id, 1500, 8, 10 from categories where name = 'Category A'
+select 'Tea', id, 1500, 8, 10 from categories where name = 'Drinks'
 union all
-select 'Sample Item 3', id, 5000, 25, 5 from categories where name = 'Category B'
+select 'Chicken Sandwich', id, 5000, 25, 5 from categories where name = 'Food'
 union all
-select 'Sample Item 4', id, 3000, 3, 5 from categories where name = 'Category C'
+select 'Chocolate Cake', id, 3000, 3, 5 from categories where name = 'Food'
+union all
+select 'Coffee Beans 1kg', id, 15000, 12, 4 from categories where name = 'Retail'
 on conflict do nothing;
 
 -- ============================================================================

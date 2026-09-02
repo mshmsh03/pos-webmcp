@@ -34,19 +34,45 @@ Two things follow from that, and they're the whole argument for the spec:
 
 ## The tools
 
-Nine tools across two pages. `find_product` is registered on both.
+Ten tools across three pages, using **both** of WebMCP's APIs — nine registered
+imperatively with `document.modelContext.registerTool()`, and one declared
+purely in HTML. `find_product` is registered on two pages.
 
-| Tool | Where | Touches | What it does |
-|---|---|---|---|
-| `get_sales_summary` | `/admin` | reads | Revenue, cash/card/other split, transaction count for today / 7d / 30d |
-| `get_financial_summary` | `/admin` | reads | Revenue, expenses and net — "are we actually making money" |
-| `get_low_stock_alerts` | `/admin` | reads | Every product at or below its restock threshold |
-| `find_product` | `/admin` + `/pos` | reads | Search the catalog by name; price and stock |
-| `get_cart` | `/pos` | reads | What's on the register right now, with the running total |
-| `add_to_cart` | `/pos` | **browser state** | Puts a product on the register — the cashier watches it appear |
-| `remove_from_cart` | `/pos` | **browser state** | Takes a line back off the draft order |
-| `clear_cart` | `/pos` | **browser state** | Starts the order over |
-| `log_expense` | `/admin` | **database** | Adds one expense line. The only tool in the app that writes to the database at all. |
+| Tool | Where | API | Touches | What it does |
+|---|---|---|---|---|
+| `get_sales_summary` | `/admin` | imperative | reads | Revenue, cash/card/other split, transaction count for today / 7d / 30d |
+| `get_financial_summary` | `/admin` | imperative | reads | Revenue, expenses and net — "are we actually making money" |
+| `get_low_stock_alerts` | `/admin` | imperative | reads | Every product at or below its restock threshold |
+| `find_product` | `/admin` + `/pos` | imperative | reads | Search the catalog by name; price and stock |
+| `filter_product_list` | `/admin/products` | **declarative** | **browser state** | Filters the product table the owner is looking at |
+| `get_cart` | `/pos` | imperative | reads | What's on the register right now, with the running total |
+| `add_to_cart` | `/pos` | imperative | **browser state** | Puts a product on the register — the cashier watches it appear |
+| `remove_from_cart` | `/pos` | imperative | **browser state** | Takes a line back off the draft order |
+| `clear_cart` | `/pos` | imperative | **browser state** | Starts the order over |
+| `log_expense` | `/admin` | imperative | **database** | Adds one expense line. The only tool in the app that writes to the database at all. |
+
+### The declarative half: the search box *is* the tool
+
+`filter_product_list` has no `registerTool()` call and no JavaScript
+implementation of its own. It's the product-search form on `/admin/products`,
+made agent-callable by four HTML attributes:
+
+```html
+<form toolname="filter_product_list"
+      tooldescription="Filter the product table the shop owner is looking at…"
+      toolautosubmit>
+  <input name="name"
+         toolparamdescription="Part of a product name to match…">
+  <select name="low_stock_only"
+          toolparamdescription="Use 'yes' to narrow to items needing restock.">
+```
+
+When an agent submits it, the browser sets `SubmitEvent#agentInvoked` and hands
+us `respondWith()` to return a result without navigating. The human typing in
+that box and the agent calling the tool run the *same* filter function — there
+is no parallel agent implementation to drift out of sync, which is the same
+one-source-of-truth property as the imperative tools, taken about as far as it
+goes.
 
 ### Three tiers, not two
 
@@ -90,7 +116,7 @@ working rather than watching the cart change by itself.
 
 The cart rules — stock limits, ambiguous product names, quantity validation —
 live in `lib/cart.js`, deliberately free of React so they can be tested
-directly. `npm test` runs 18 assertions against them, no test framework
+directly. `npm test` runs 21 assertions against them, no test framework
 required.
 
 ## Setup — from zero to a working deploy
@@ -104,7 +130,7 @@ provision.
 In your new project: **SQL Editor → New query**, paste the entire contents of
 [`supabase/schema.sql`](./supabase/schema.sql), and click **Run**. This creates
 every table, the `record_sale()` function, the `tool_calls` audit table, all the
-Row Level Security policies, and four sample products so the app isn't empty on
+Row Level Security policies, and a small café catalogue so the app isn't empty on
 first load.
 
 ### 3. Get your API keys
@@ -156,7 +182,9 @@ limited to specific surfaces right now:
 
 Things worth trying on `/pos`: *"ring up two coffees and a sandwich"*,
 *"actually drop the sandwich"*, *"what's my total?"* — then press Cash
-yourself, because nothing else can.
+yourself, because nothing else can. On `/admin/products`, *"show me just the
+things I need to restock"* fires the declarative tool and filters the table in
+front of you.
 
 The dot next to the status line on `/admin` and `/pos` tells you whether the
 current browser supports WebMCP at all. The app works completely normally

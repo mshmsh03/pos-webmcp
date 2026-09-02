@@ -7,6 +7,7 @@ const PRODUCTS = [
   { id: '2', name: 'Coffee', price: 2500, stock: 10 },
   { id: '3', name: 'Sandwich', price: 5000, stock: 2 },
   { id: '4', name: 'Sold Out Cake', price: 3000, stock: 0 },
+  { id: '5', name: 'Pastry', price: 2000, stock: 6 },
 ];
 
 let pass = 0;
@@ -82,6 +83,26 @@ check('exact name beats a substring collision ("Coffee" vs "Coffee Beans 1kg")',
   const r = api.add('Coffee');
   assert(r.added.startsWith('Coffee ×'), `added: ${r.added}`);
   assert(r.total === 2500, `should be the 2500 Coffee, got ${r.total}`);
+});
+
+check('accepts a plural ("two coffees") without hitting the substring collision', () => {
+  const { api } = fresh();
+  const r = api.add('coffees', 2);
+  assert(r.added.startsWith('Coffee ×'), `added: ${r.added}`);
+  assert(r.total === 5000, `should be 2 x 2500, got ${r.total}`);
+});
+
+check('handles -es and -ies plurals', () => {
+  const { api } = fresh();
+  assert(api.add('Sandwiches').added.startsWith('Sandwich ×'), 'sandwiches → Sandwich');
+  const { api: api2 } = fresh();
+  assert(api2.add('Pastries').added.startsWith('Pastry ×'), 'pastries → Pastry');
+});
+
+check('a plural still matches a multi-word name', () => {
+  const { api } = fresh();
+  const r = api.add('coffee beans');
+  assert(r.added.startsWith('Coffee Beans 1kg ×'), `added: ${r.added}`);
 });
 
 check('refuses an ambiguous partial name instead of guessing', () => {
