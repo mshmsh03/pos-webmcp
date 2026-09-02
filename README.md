@@ -64,9 +64,9 @@ button.
 
 ## The tools
 
-Ten tools across three pages, using **both** of WebMCP's APIs — nine registered
-imperatively with `document.modelContext.registerTool()`, and one declared
-purely in HTML. `find_product` is registered on two pages.
+Eleven tools across three pages, using **both** of WebMCP's APIs — ten
+registered imperatively with `document.modelContext.registerTool()`, and one
+declared purely in HTML. `find_product` is registered on two pages.
 
 | Tool | Where | API | Touches | What it does |
 |---|---|---|---|---|
@@ -79,7 +79,33 @@ purely in HTML. `find_product` is registered on two pages.
 | `add_to_cart` | `/pos` | imperative | **browser state** | Puts a product on the register — the cashier watches it appear |
 | `remove_from_cart` | `/pos` | imperative | **browser state** | Takes a line back off the draft order |
 | `clear_cart` | `/pos` | imperative | **browser state** | Starts the order over |
+| `ask_cashier` | `/pos` | imperative | **a person** | Puts a question on the register and waits for the cashier to tap an answer |
 | `log_expense` | `/admin` | imperative | **database** | Adds one expense line. The only tool in the app that writes to the database at all. |
+
+### The channel that runs the other way
+
+Every tool above moves agent → screen. `ask_cashier` moves agent → **person**:
+it puts a question on the register and blocks until the cashier taps a reply.
+
+```
+Agent: add_to_cart("c")
+  →  "c" matches 3 products: Chicken Sandwich, Chocolate Cake, Coffee.
+     Do not guess — call ask_cashier with these as the options.
+Agent: ask_cashier("Which one did you mean?", [...])
+  →  cashier taps "Coffee"  →  { answered: true, answer: "Coffee" }
+Agent: add_to_cart("Coffee")
+```
+
+A server-side MCP server cannot do this at all: it has no screen to ask on and
+nobody standing in front of it. Its only recourse when a request is ambiguous is
+to guess, or to bounce the question back through chat and hope the person is
+still looking there. Here the question lands on the display the cashier's hands
+are already on, and the answer comes back inside the same tool call.
+
+It resolves `{answered:false, reason}` after two minutes so a cashier who walks
+away can't leave an agent hanging, and it's the one tool annotated as neither
+read-only nor destructive: it changes nothing, but interrupting a working person
+is a real effect and shouldn't be labelled as free.
 
 ### The declarative half: the search box *is* the tool
 

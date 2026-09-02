@@ -108,6 +108,7 @@ check('a plural still matches a multi-word name', () => {
 check('refuses an ambiguous partial name instead of guessing', () => {
   const { api } = fresh();
   throws(() => api.add('coff'), 'matches 2 products');
+  throws(() => api.add('coff'), 'ask_cashier'); // points the agent at the human, not at a guess
 });
 
 check('refuses a name that matches nothing', () => {

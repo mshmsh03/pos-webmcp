@@ -20,6 +20,12 @@ export default function PosPage() {
   const [webmcpReady, setWebmcpReady] = useState(false);
   const [agentAction, setAgentAction] = useState(null);
   const [loadError, setLoadError] = useState('');
+  const [pendingQuestion, setPendingQuestion] = useState(null);
+
+  // Holds the in-flight ask_cashier promise. A ref rather than state because
+  // the tool's execute() closure has to reach the *current* one, and it runs
+  // outside React's render cycle.
+  const pendingRef = useRef(null);
 
   // The WebMCP tools are registered once, on mount, but they need to read and
   // write cart/product state that changes constantly. Closing over `cart`
@@ -70,6 +76,54 @@ export default function PosPage() {
     []
   );
 
+  // --------------------------------------------------------------------------
+  // ask_cashier: the channel back from the agent to the person.
+  //
+  // Every other tool here runs agent -> screen. This one runs the other way:
+  // the agent puts a question on the register and waits for the cashier to
+  // answer it with a tap. That is only possible because the tool lives in the
+  // page — a server-side MCP server has no screen to ask on and nobody standing
+  // in front of it.
+  //
+  // It matters because the alternative to asking is guessing. An agent that
+  // can't ask "which sandwich?" either picks one or gives up; an agent that can
+  // ask gets a decision from the one person who actually knows, without either
+  // of them leaving the register.
+  //
+  // Resolves with the tapped answer, or after two minutes with answered:false
+  // so a walked-away cashier can't hang the agent forever.
+  // --------------------------------------------------------------------------
+  const askCashier = useMemo(
+    () => (question, options) =>
+      new Promise((resolve) => {
+        // Only one question on screen at a time; a newer one supersedes.
+        if (pendingRef.current) pendingRef.current.settle({ answered: false, reason: 'replaced by a newer question' });
+
+        const entry = {};
+        entry.settle = (value) => {
+          if (pendingRef.current !== entry) return; // already settled
+          pendingRef.current = null;
+          clearTimeout(entry.timer);
+          setPendingQuestion(null);
+          resolve(value);
+        };
+        entry.timer = setTimeout(
+          () => entry.settle({ answered: false, reason: 'the cashier did not reply within two minutes' }),
+          120000
+        );
+
+        pendingRef.current = entry;
+        setPendingQuestion({ question, options, at: new Date() });
+      }),
+    []
+  );
+
+  // Don't leave an agent awaiting a promise that can never settle.
+  useEffect(
+    () => () => pendingRef.current?.settle({ answered: false, reason: 'the register was closed' }),
+    []
+  );
+
   // WebMCP: the register exposes a read-only catalog lookup plus the cart
   // tools above. Registration is feature-detected — with no WebMCP in the
   // browser this is a no-op and the register behaves exactly as it always did.
@@ -82,7 +136,8 @@ export default function PosPage() {
       try {
         const { supported, unregister: cleanup } = await registerCashierTools(
           (name, input) => setAgentAction({ name, input, at: new Date() }),
-          cartApi
+          cartApi,
+          askCashier
         );
         // If the effect already tore down while we were awaiting, the returned
         // cleanup would otherwise be dropped on the floor and the tools would
@@ -103,7 +158,7 @@ export default function PosPage() {
       cancelled = true;
       unregister();
     };
-  }, [cartApi, guard]);
+  }, [cartApi, askCashier, guard]);
 
   async function load() {
     setLoading(true);
@@ -225,6 +280,37 @@ export default function PosPage() {
           <span className="ml-auto text-emerald-600">
             {agentAction.at.toLocaleTimeString()}
           </span>
+        </div>
+      )}
+
+      {pendingQuestion && (
+        <div className="mb-4 rounded-lg border-2 border-amber-300 bg-amber-50 p-4">
+          <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-amber-700">
+            The agent is asking you
+          </p>
+          <p className="mb-3 text-sm text-ink">{pendingQuestion.question}</p>
+          <div className="flex flex-wrap gap-2">
+            {(pendingQuestion.options?.length
+              ? pendingQuestion.options
+              : ['Yes', 'No']
+            ).map((opt) => (
+              <button
+                key={opt}
+                onClick={() => pendingRef.current?.settle({ answered: true, answer: opt })}
+                className="rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700"
+              >
+                {opt}
+              </button>
+            ))}
+            <button
+              onClick={() =>
+                pendingRef.current?.settle({ answered: false, reason: 'the cashier dismissed the question' })
+              }
+              className="rounded px-3 py-1.5 text-xs text-amber-800 underline"
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
 
