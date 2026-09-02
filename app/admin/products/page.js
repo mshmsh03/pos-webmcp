@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { getAllProducts, updateProduct, logToolCall } from '../../../lib/queries';
-import { supabase } from '../../../lib/supabaseClient';
+import { getAllProducts, updateProduct, createProduct, logToolCall } from '../../../lib/queries';
 import { useRoleGuard } from '../../../lib/useRoleGuard';
+import { CURRENCY } from '../../../lib/format';
 
 // Shared by the human typing in the filter box and by an agent calling the
 // declarative tool below — one implementation, not two.
@@ -68,9 +68,14 @@ export default function ProductsPage() {
       setSavedId(`${id}:${field}`);
       clearTimeout(savedTimer.current);
       savedTimer.current = setTimeout(() => setSavedId(null), 1200);
-      await load();
     } catch (err) {
       setError(err.message);
+    } finally {
+      // Reload on the failure path too. The inputs are uncontrolled, so
+      // without this a rejected edit left the cell still displaying the value
+      // the database refused — a price table quietly disagreeing with the
+      // database, under a small red banner nobody reads twice.
+      await load();
     }
   }
 
@@ -78,12 +83,12 @@ export default function ProductsPage() {
     e.preventDefault();
     setError('');
     try {
-      const { error: insertError } = await supabase.from('products').insert({
-        name: newProduct.name.trim(),
-        price: Number(newProduct.price),
-        stock: Number(newProduct.stock) || 0,
-      });
-      if (insertError) throw insertError;
+      // Through createProduct rather than a raw insert, so creating a product
+      // is held to the same validation as editing one.
+      // Stock is the one optional field on this form — an item can be added to
+      // the catalogue before any of it arrives. Price is not optional, and
+      // createProduct rejects a blank rather than reading it as zero.
+      await createProduct({ ...newProduct, stock: newProduct.stock === '' ? 0 : newProduct.stock });
       setNewProduct({ name: '', price: '', stock: '' });
       await load();
     } catch (err) {
@@ -234,7 +239,7 @@ export default function ProductsPage() {
           required
         />
         <input
-          placeholder="Price"
+          placeholder={`Price (${CURRENCY})`}
           type="number"
           min="0"
           step="any"
@@ -265,7 +270,7 @@ export default function ProductsPage() {
           <thead className="bg-ground text-left text-xs uppercase text-slate-500">
             <tr>
               <th className="px-4 py-2">Name</th>
-              <th className="px-4 py-2">Price</th>
+              <th className="px-4 py-2">Price ({CURRENCY})</th>
               <th className="px-4 py-2">Stock</th>
               <th className="px-4 py-2">Restock at</th>
             </tr>

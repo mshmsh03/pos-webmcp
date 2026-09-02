@@ -7,6 +7,7 @@ import { supabase } from '../../lib/supabaseClient';
 import { getSalesSummary, getLowStockAlerts, getRecentSales, getRecentToolCalls } from '../../lib/queries';
 import { registerAdminTools } from '../../lib/webmcpTools';
 import { useRoleGuard } from '../../lib/useRoleGuard';
+import { money } from '../../lib/format';
 
 export default function AdminDashboard() {
   const router = useRouter();
@@ -55,21 +56,48 @@ export default function AdminDashboard() {
     // Not just "don't show the data" — don't offer the tools at all until we
     // know this session belongs to an admin. See lib/useRoleGuard.js.
     if (guard !== 'allowed') return undefined;
+
+    // `cancelled` is not defensive padding. Registration is async, and in the
+    // App Router the *document* survives client navigation — so if this effect
+    // tears down while registerAdminTools() is still in flight, the cleanup
+    // handle comes back to a dead closure, abort() is never called, and the
+    // five admin tools stay live on document.modelContext. Navigate
+    // /admin -> /pos fast enough and the cashier's register would be
+    // advertising log_expense and get_sales_summary from a page that no longer
+    // exists, which breaks the whole "an agent gets exactly the permissions of
+    // the page the human is on" property. Same shape as app/pos/page.js.
+    let cancelled = false;
     let unregister = () => {};
 
     (async () => {
-      const { supported, unregister: cleanup } = await registerAdminTools((name, input, result) => {
-        setLastToolCall({ name, input, result, at: new Date() });
-        // Whatever the agent just looked at or changed, refresh the human's
-        // view of it too — this is the "visible tool calls" principle from
-        // the WebMCP spec in practice.
-        refresh().catch(() => {});
-      });
-      setWebmcpReady(supported);
-      unregister = cleanup;
+      try {
+        const { supported, unregister: cleanup } = await registerAdminTools(
+          (name, input, result) => {
+            setLastToolCall({ name, input, result, at: new Date() });
+            // Whatever the agent just looked at or changed, refresh the human's
+            // view of it too — this is the "visible tool calls" principle from
+            // the WebMCP spec in practice.
+            refresh().catch(() => {});
+          }
+        );
+        if (cancelled) {
+          cleanup();
+          return;
+        }
+        setWebmcpReady(supported);
+        unregister = cleanup;
+      } catch (err) {
+        // Don't leave the header claiming "WebMCP not available in this
+        // browser" when what actually happened is that registration failed.
+        if (!cancelled) setWebmcpReady(false);
+        console.error('WebMCP tool registration failed on /admin:', err);
+      }
     })();
 
-    return () => unregister();
+    return () => {
+      cancelled = true;
+      unregister();
+    };
   }, [refresh, guard]);
 
   async function signOut() {
@@ -150,12 +178,12 @@ export default function AdminDashboard() {
       )}
 
       <section className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-5">
-        <Stat label="Revenue today" value={summary.revenue.toLocaleString()} />
-        <Stat label="Cash" value={summary.cash.toLocaleString()} />
-        <Stat label="Card" value={summary.card.toLocaleString()} />
+        <Stat label="Revenue today" value={money(summary.revenue)} />
+        <Stat label="Cash" value={money(summary.cash)} />
+        <Stat label="Card" value={money(summary.card)} />
         {/* Without this tile a sale taken as "other" left Cash + Card visibly
             short of Revenue, with nothing on screen explaining the gap. */}
-        <Stat label="Other" value={summary.other.toLocaleString()} />
+        <Stat label="Other" value={money(summary.other)} />
         <Stat label="Transactions" value={summary.transactionCount} />
       </section>
 
@@ -187,7 +215,7 @@ export default function AdminDashboard() {
               {recentSales.map((s) => (
                 <li key={s.id} className="flex justify-between">
                   <span className="capitalize text-slate-500">{s.payment_method}</span>
-                  <span>{Number(s.total).toLocaleString()}</span>
+                  <span>{money(s.total)}</span>
                   <span className="text-xs text-slate-400">
                     {new Date(s.created_at).toLocaleTimeString()}
                   </span>
@@ -219,8 +247,13 @@ export default function AdminDashboard() {
                     <span className="text-xs text-slate-400">{JSON.stringify(call.input)}</span>
                   )}
                 </span>
-                <span className="shrink-0 text-xs text-slate-400">
-                  {new Date(call.created_at).toLocaleTimeString()}
+                <span className="flex shrink-0 items-center gap-3 text-xs text-slate-400">
+                  {/* Who, not just what. This is a public demo URL, so these
+                      rows are not all necessarily yours. */}
+                  <span className="max-w-[10rem] truncate">
+                    {call.profiles?.full_name || 'unknown account'}
+                  </span>
+                  <span>{new Date(call.created_at).toLocaleTimeString()}</span>
                 </span>
               </li>
             ))}

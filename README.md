@@ -80,7 +80,7 @@ declared purely in HTML. `find_product` is registered on two pages.
 | `remove_from_cart` | `/pos` | imperative | **browser state** | Takes a line back off the draft order |
 | `clear_cart` | `/pos` | imperative | **browser state** | Starts the order over |
 | `ask_cashier` | `/pos` | imperative | **a person** | Puts a question on the register and waits for the cashier to tap an answer |
-| `log_expense` | `/admin` | imperative | **database** | Adds one expense line. The only tool in the app that writes to the database at all. |
+| `log_expense` | `/admin` | imperative | **database** | Adds one expense line. The only tool that writes *business* data. |
 
 ### The channel that runs the other way
 
@@ -140,16 +140,29 @@ blunt for anything handling money, so this one has three:
    `destructiveHint: false`: reversible, local, invisible to the database, and
    undoable by the cashier with one tap. An agent can assemble an order and be
    completely *wrong* about it without costing anyone anything.
-3. **Write to the database** — exactly one tool, `log_expense`, and all it can
+3. **Write business data** — exactly one tool, `log_expense`, and all it can
    do is append an expense line. It cannot touch a sale, stock, or an account.
+
+   (Every tool, including the read-only ones, also appends a row to the
+   `tool_calls` audit table described below. That is bookkeeping *about* the
+   call rather than data the caller chose to write, but it is still a database
+   write — so "one tool writes, the rest don't" would be too neat a claim.)
 
 **No tool can complete a sale.** `record_sale()` is reachable only from the
 Cash / Card / Other buttons a human presses. The agent gets the keyboard, never
 the cash drawer — every irreversible action stays with the person.
 
 This matters because the deployed demo is a public URL. Anyone's agent can call
-these tools, so the blast radius of a bad or malicious call is capped at "an
-expense row you can delete, or a cart you can clear."
+these tools, so the blast radius of a bad or malicious **tool call** is capped
+at "an expense row you can delete, or a cart you can clear."
+
+Worth stating precisely, because the tool surface is not the only surface: sign-up
+is open on the demo, and a signed-up cashier can call `record_sale()` directly
+with the public anon key — that is the cashier capability working as designed,
+not a hole in the tool layer, but it is a bigger surface than the tools. A shop
+running this for real should turn off self-service sign-up in Supabase Auth once
+the first account exists; the setup below already provisions staff by an admin
+changing a role rather than by sign-up.
 
 ### The tool surface itself is scoped to the role
 
@@ -197,8 +210,15 @@ around it.
   concurrent checkouts deadlocking on opposite orderings.
 - **Prices come from the database, never the request.**
 
-`supabase/migrations/` carries these as a migration for databases created from
-an earlier copy of the schema.
+- **The sales table is append-only.** No update or delete policy exists on it
+  at all — `record_sale()` is the only thing that can write a sale. A
+  correction goes into the books as another entry rather than a silent rewrite
+  of the original.
+
+`supabase/migrations/` carries each of these as a numbered migration, so a
+database created from an earlier copy of `schema.sql` can be brought forward
+without being rebuilt. The migrations are generated from `schema.sql` rather
+than written alongside it, so the two cannot drift apart.
 
 ### One source of truth, and a receipt for everything
 
@@ -221,8 +241,10 @@ working rather than watching the cart change by itself.
 
 The cart rules — stock limits, ambiguous product names, quantity validation —
 live in `lib/cart.js`, deliberately free of React so they can be tested
-directly. `npm test` runs 24 assertions against them, no test framework
-required.
+directly. `npm test` runs 32 checks against them — name matching, plural
+handling, stock limits, ambiguity, and the invariant that a failed add leaves
+the cart untouched — with no test framework required. `npm run lint` is clean,
+and the production build does not skip it.
 
 ## Setup — from zero to a working deploy
 
@@ -253,9 +275,10 @@ npm run dev
 Open `http://localhost:3000` — it redirects to `/login`.
 
 ### 5. Create your admin account
-Sign up once through the app's login page (any email/password — Supabase's
-default settings don't require email confirmation for a new project). Every
-new sign-up defaults to the `cashier` role. To make yourself an admin:
+Sign up once through the app's login page. New Supabase projects have email
+confirmation **on**, so you will either need to click the link in the
+confirmation email or turn confirmation off under **Authentication → Providers
+→ Email** first. Every new sign-up defaults to the `cashier` role. To make yourself an admin:
 **Table Editor → profiles** in Supabase, find your row, change `role` from
 `cashier` to `admin`, save. Sign out and back in — you'll land on `/admin`.
 
@@ -302,6 +325,15 @@ either way — `document.modelContext` is feature-detected, never assumed.
   dashboard, but multi-location would need a stored shop timezone.
 - No real card processing — `card` is just a logged label; you still need a
   physical card terminal alongside this.
+- Stock on an open register refreshes on mount, after a sale, and when the tab
+  regains focus — not live. Two tills running at once will not see each other's
+  stock move in real time; a Postgres Realtime subscription on `products` is
+  the obvious next step.
+- Sale line items are stored (`sale_items` records the product name as it was
+  at the time, so history survives a rename) but there is no per-receipt view
+  yet — the dashboard shows method, total and time only.
+- No pagination on the product table or the sales list. Fine for a corner shop,
+  not for a supermarket.
 - Staff accounts are created by signing up and then having an admin flip the
   role in Supabase's Table Editor — deliberate, no self-serve admin signup.
 - Supabase's free tier pauses a project after roughly a week of low activity,

@@ -1,6 +1,6 @@
 // Rules for the cashier cart an agent can drive on /pos. Run with `npm test`.
 // Zero dependencies on purpose — plain node, no test framework to install.
-import { createCartApi } from '../lib/cart.js';
+import { createCartApi, matchProduct, summarizeCart } from '../lib/cart.js';
 
 const PRODUCTS = [
   { id: '1', name: 'Coffee Beans 1kg', price: 15000, stock: 4 },
@@ -226,6 +226,73 @@ check('sequential adds do not lose earlier items', () => {
   assert(r.lines.length === 3, `expected 3 lines, got ${r.lines.length}`);
   assert(r.item_count === 4, `expected 4 items, got ${r.item_count}`);
   assert(r.total === 2500 * 2 + 5000 + 15000, `total was ${r.total}`);
+});
+
+// --------------------------------------------------------------------------
+// matchProduct is the single most load-bearing function here: it is what turns
+// a phrase a person said out loud, filtered through a language model, into one
+// row of a catalogue. It was previously only exercised through add(), which
+// hid which pass actually fired. These test it directly.
+// --------------------------------------------------------------------------
+console.log('\nname matching:');
+
+check('resolution order: exact > exact-singular > partial > partial-singular', () => {
+  assert(matchProduct(PRODUCTS, 'Coffee', 'catalog').name === 'Coffee', 'exact');
+  assert(matchProduct(PRODUCTS, 'coffees', 'catalog').name === 'Coffee', 'exact singular');
+  assert(matchProduct(PRODUCTS, 'beans', 'catalog').name === 'Coffee Beans 1kg', 'partial');
+  assert(matchProduct(PRODUCTS, 'pastries', 'catalog').name === 'Pastry', 'partial singular');
+});
+
+check('matching ignores case and surrounding whitespace', () => {
+  assert(matchProduct(PRODUCTS, '  cOfFeE  ', 'catalog').name === 'Coffee', 'normalisation');
+});
+
+check('an empty or whitespace-only name is refused, not treated as "everything"', () => {
+  throws(() => matchProduct(PRODUCTS, '', 'catalog'), 'give a product name');
+  throws(() => matchProduct(PRODUCTS, '   ', 'catalog'), 'give a product name');
+});
+
+check('an ambiguous query names every candidate so the agent can offer them', () => {
+  let message = '';
+  try {
+    matchProduct(PRODUCTS, 'co', 'catalog');
+  } catch (err) {
+    message = err.message;
+  }
+  assert(message.includes('Coffee'), 'should name Coffee');
+  assert(message.includes('Coffee Beans 1kg'), 'should name Coffee Beans 1kg');
+  assert(message.includes('ask_cashier'), 'should point at the human, not at a guess');
+});
+
+check('a short query is fine when it is unambiguous — only ambiguity is refused', () => {
+  assert(matchProduct(PRODUCTS, 'sand', 'catalog').name === 'Sandwich', 'sand → Sandwich');
+  assert(matchProduct(PRODUCTS, 'cake', 'catalog').name === 'Sold Out Cake', 'cake → Sold Out Cake');
+});
+
+check('a name that matches nothing says so rather than returning undefined', () => {
+  throws(() => matchProduct(PRODUCTS, 'pizza', 'catalog'), 'nothing in the catalog matches');
+});
+
+console.log('\ncart summary:');
+
+check('summarizeCart reports lines, count and total without touching the input', () => {
+  const lines = [
+    { product: PRODUCTS[1], quantity: 2 },
+    { product: PRODUCTS[2], quantity: 1 },
+  ];
+  const frozen = JSON.stringify(lines);
+  const s = summarizeCart(lines);
+  assert(s.lines.length === 2, 'lines');
+  assert(s.item_count === 3, `item_count was ${s.item_count}`);
+  assert(s.total === 2500 * 2 + 5000, `total was ${s.total}`);
+  assert(s.lines[0].unit_price === 2500, 'unit_price');
+  assert(JSON.stringify(lines) === frozen, 'summarize must not mutate the cart');
+});
+
+check('an empty cart summarizes to zeroes, not to an error', () => {
+  const s = summarizeCart([]);
+  assert(s.item_count === 0 && s.total === 0 && s.lines.length === 0, 'empty');
+  assert(/must press Cash/i.test(s.status), 'status still states who can sell');
 });
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

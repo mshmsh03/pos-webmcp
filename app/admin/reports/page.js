@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getReportsData, logExpense } from '../../../lib/queries';
 import { useRoleGuard } from '../../../lib/useRoleGuard';
+import { money, CURRENCY } from '../../../lib/format';
 
 export default function ReportsPage() {
   const { status: guard } = useRoleGuard('admin');
@@ -93,9 +94,9 @@ export default function ReportsPage() {
 
       {data && (
         <section className="mb-4 grid grid-cols-3 gap-3">
-          <Stat label="Revenue" value={data.revenue.toLocaleString()} />
-          <Stat label="Expenses" value={data.expenses.toLocaleString()} />
-          <Stat label="Net" value={data.net.toLocaleString()} highlight={data.net < 0} />
+          <Stat label="Revenue" value={money(data.revenue)} />
+          <Stat label="Expenses" value={money(data.expenses)} />
+          <Stat label="Net" value={money(data.net)} highlight={data.net < 0} />
         </section>
       )}
 
@@ -110,7 +111,7 @@ export default function ReportsPage() {
             required
           />
           <input
-            placeholder="Amount"
+            placeholder={`Amount (${CURRENCY})`}
             type="number"
             value={expense.amount}
             onChange={(e) => setExpense({ ...expense, amount: e.target.value })}

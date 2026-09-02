@@ -234,6 +234,15 @@ as $$
   );
 $$;
 
+-- Same reasoning as the REVOKE on record_sale() above: Postgres grants EXECUTE
+-- on every new function to PUBLIC, and Supabase exposes them to `anon`. These
+-- two are SECURITY DEFINER as well, so they get the same treatment rather than
+-- relying on "calling it wouldn't achieve anything" — that is an argument about
+-- today's implementation, not a boundary.
+revoke all on function public.is_admin() from public, anon;
+grant execute on function public.is_admin() to authenticated;
+revoke all on function public.handle_new_user() from public, anon;
+
 -- profiles: everyone can see their own row; admins see all
 create policy "profiles_select_own_or_admin" on profiles
   for select using (id = auth.uid() or is_admin());
@@ -272,8 +281,16 @@ create policy "products_admin_write" on products
 -- Direct inserts are blocked — all sales go through record_sale() (security definer).
 create policy "sales_select_own_or_admin" on sales
   for select using (cashier_id = auth.uid() or is_admin());
-create policy "sales_admin_update" on sales
-  for update using (is_admin());
+
+-- There is deliberately NO update or delete policy on sales. The sales table is
+-- the financial record, and record_sale() is the only thing that may write to
+-- it. An earlier "sales_admin_update" policy here let an admin PATCH a
+-- historical sale's total, payment method, cashier or timestamp straight
+-- through the REST API — no audit row, no trace — which quietly turned an
+-- append-only ledger into an editable one. Nothing in the app ever updated a
+-- sale, so it bought nothing and cost the one property that made the numbers
+-- trustworthy. A correction belongs in the books as another entry, not as a
+-- silent rewrite of the original.
 
 create policy "sale_items_select_via_sale" on sale_items
   for select using (
@@ -299,7 +316,11 @@ create policy "tool_calls_insert_own" on tool_calls
     called_by = auth.uid()
     and length(tool_name) between 1 and 100
     and pg_column_size(input) < 8192
-    and pg_column_size(result) < 32768
+    -- pg_column_size is STRICT, so pg_column_size(NULL) is NULL, the whole
+    -- WITH CHECK evaluates to NULL, and RLS treats that as a refusal. A tool
+    -- call logged with no result would have vanished from the audit trail
+    -- silently — the one failure mode an audit trail must not have.
+    and (result is null or pg_column_size(result) < 32768)
   );
 create policy "tool_calls_select_admin" on tool_calls
   for select using (is_admin());

@@ -8,6 +8,7 @@ import { getAllProducts } from '../../lib/queries';
 import { createCartApi } from '../../lib/cart';
 import { registerCashierTools } from '../../lib/webmcpTools';
 import { useRoleGuard } from '../../lib/useRoleGuard';
+import { money, CURRENCY } from '../../lib/format';
 
 export default function PosPage() {
   const router = useRouter();
@@ -45,8 +46,26 @@ export default function PosPage() {
   }, [cart]);
 
   useEffect(() => {
-    if (guard !== 'allowed') return;
+    if (guard !== 'allowed') return undefined;
     load().catch(() => {});
+
+    // A register sits open all day, and stock was only ever re-read on mount
+    // and after a sale — so a second till, or an admin restocking, was
+    // invisible here until someone reloaded. add_to_cart would then cheerfully
+    // accept an order against yesterday's numbers and fail at the till with a
+    // raw Postgres error, which is exactly what the client-side stock check
+    // exists to prevent. Refreshing when the tab regains focus is the cheap
+    // version of this: it costs one query at the moment a cashier comes back
+    // to the screen, and no polling in between.
+    const refetch = () => {
+      if (document.visibilityState === 'visible') load().catch(() => {});
+    };
+    window.addEventListener('focus', refetch);
+    document.addEventListener('visibilitychange', refetch);
+    return () => {
+      window.removeEventListener('focus', refetch);
+      document.removeEventListener('visibilitychange', refetch);
+    };
   }, [guard]);
 
   // --------------------------------------------------------------------------
@@ -195,6 +214,28 @@ export default function PosPage() {
     });
   }
 
+  // The cashier's − / + buttons. Routed through the same cart rules the agent
+  // uses so the stock check applies identically to both; dropping to zero is
+  // just a remove.
+  function setQuantity(line, next) {
+    try {
+      if (next <= 0) {
+        removeFromCart(line.product.id);
+      } else if (next > line.quantity) {
+        cartApi.addProduct(line.product, next - line.quantity);
+      } else {
+        const updated = cartRef.current.map((l) =>
+          l.product.id === line.product.id ? { ...l, quantity: next } : l
+        );
+        cartRef.current = updated;
+        setCart(updated);
+      }
+      setMessage('');
+    } catch (err) {
+      setMessage(err.message);
+    }
+  }
+
   const total = cart.reduce((sum, line) => sum + line.product.price * line.quantity, 0);
 
   async function checkout(paymentMethod) {
@@ -202,17 +243,47 @@ export default function PosPage() {
     setCheckingOut(true);
     setMessage('');
 
+    // Snapshot exactly what is being sold. The payment buttons are disabled
+    // while this runs, but the product tiles and — more to the point — the
+    // agent's add_to_cart tool are not: this app's whole premise is that an
+    // agent may be building the cart while the cashier is working. Clearing
+    // the cart wholesale on success therefore threw away anything that landed
+    // during the round trip: never sold, never charged, and silently gone.
+    const sold = cartRef.current;
+
     try {
-      const { error } = await supabase.rpc('record_sale', {
-        cart: cart.map((line) => ({ product_id: line.product.id, quantity: line.quantity })),
+      const { data: saleId, error } = await supabase.rpc('record_sale', {
+        cart: sold.map((line) => ({ product_id: line.product.id, quantity: line.quantity })),
         p_payment_method: paymentMethod,
       });
       if (error) throw error;
 
-      cartRef.current = [];
-      setCart([]);
+      // Remove only the lines that were actually sold, keeping anything added
+      // mid-checkout as the start of the next order.
+      const soldIds = new Set(sold.map((line) => line.product.id));
+      const carried = cartRef.current.filter((line) => !soldIds.has(line.product.id));
+      cartRef.current = carried;
+      setCart(carried);
       setAgentAction(null);
-      setMessage(`Sale recorded — paid by ${paymentMethod}.`);
+
+      // Read back what was actually recorded rather than echoing the number
+      // that was on screen. record_sale() recomputes every unit price from the
+      // products table at checkout time — deliberately, so a stale tab can't
+      // dictate a price — which means the screen total and the booked total
+      // can legitimately differ if someone repriced an item mid-order. The
+      // cashier is about to take cash for this; they should be told the figure
+      // that went into the books, not the one they were looking at.
+      const { data: recorded } = await supabase
+        .from('sales')
+        .select('total')
+        .eq('id', saleId)
+        .single();
+
+      const amountText = recorded ? ` ${money(recorded.total)}` : '';
+      setMessage(
+        `Sale recorded —${amountText} paid by ${paymentMethod}.` +
+          (carried.length ? ' Items added during checkout are still on the register.' : '')
+      );
     } catch (err) {
       setMessage(`Error: ${err.message}`);
     } finally {
@@ -293,9 +364,9 @@ export default function PosPage() {
             {(pendingQuestion.options?.length
               ? pendingQuestion.options
               : ['Yes', 'No']
-            ).map((opt) => (
+            ).map((opt, i) => (
               <button
-                key={opt}
+                key={`${i}:${opt}`}
                 onClick={() => pendingRef.current?.settle({ answered: true, answer: opt })}
                 className="rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700"
               >
@@ -345,7 +416,7 @@ export default function PosPage() {
                 >
                   <span className="text-sm font-medium text-ink">{p.name}</span>
                   <span className="text-xs text-slate-500">
-                    {p.price.toLocaleString()} · stock {p.stock}
+                    {money(p.price)} · stock {p.stock}
                   </span>
                 </button>
               ))}
@@ -360,12 +431,33 @@ export default function PosPage() {
           ) : (
             <ul className="mb-4 space-y-2">
               {cart.map((line) => (
-                <li key={line.product.id} className="flex items-center justify-between text-sm">
-                  <span>
-                    {line.product.name} × {line.quantity}
+                <li key={line.product.id} className="flex items-center justify-between gap-2 text-sm">
+                  <span className="min-w-0 flex-1 truncate">{line.product.name}</span>
+                  {/* add_to_cart takes a quantity, so an agent could ring up
+                      ten coffees in one call while the cashier had to tap the
+                      tile ten times and could only delete a whole line. The
+                      person standing at the register should not have the worse
+                      register. Both steppers go through the same cart rules,
+                      so + still refuses to exceed stock. */}
+                  <span className="flex shrink-0 items-center gap-1">
+                    <button
+                      onClick={() => setQuantity(line, line.quantity - 1)}
+                      className="h-6 w-6 rounded border border-line text-xs leading-none text-slate-600 hover:border-accent"
+                      aria-label={`One fewer ${line.product.name}`}
+                    >
+                      −
+                    </button>
+                    <span className="w-6 text-center tabular-nums">{line.quantity}</span>
+                    <button
+                      onClick={() => setQuantity(line, line.quantity + 1)}
+                      className="h-6 w-6 rounded border border-line text-xs leading-none text-slate-600 hover:border-accent"
+                      aria-label={`One more ${line.product.name}`}
+                    >
+                      +
+                    </button>
                   </span>
-                  <span className="flex items-center gap-2">
-                    {(line.product.price * line.quantity).toLocaleString()}
+                  <span className="flex shrink-0 items-center gap-2 tabular-nums">
+                    {money(line.product.price * line.quantity)}
                     <button
                       onClick={() => removeFromCart(line.product.id)}
                       className="text-xs text-red-500"
@@ -381,7 +473,7 @@ export default function PosPage() {
 
           <div className="mb-4 flex justify-between border-t border-line pt-3 text-sm font-semibold">
             <span>Total</span>
-            <span>{total.toLocaleString()}</span>
+            <span className="tabular-nums">{money(total)}</span>
           </div>
 
           <div className="grid grid-cols-3 gap-2">
