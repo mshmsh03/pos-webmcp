@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { getAllProducts, updateProduct, logToolCall } from '../../../lib/queries';
 import { supabase } from '../../../lib/supabaseClient';
+import { useRoleGuard } from '../../../lib/useRoleGuard';
 
 // Shared by the human typing in the filter box and by an agent calling the
 // declarative tool below — one implementation, not two.
@@ -17,6 +18,7 @@ function applyFilter(products, { name, lowStockOnly }) {
 }
 
 export default function ProductsPage() {
+  const { status: guard } = useRoleGuard('admin');
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [newProduct, setNewProduct] = useState({ name: '', price: '', stock: '' });
@@ -33,8 +35,9 @@ export default function ProductsPage() {
   }, [products]);
 
   useEffect(() => {
+    if (guard !== 'allowed') return;
     load();
-  }, []);
+  }, [guard]);
 
   async function load() {
     setLoading(true);
@@ -128,6 +131,16 @@ export default function ProductsPage() {
 
   const visible = useMemo(() => applyFilter(products, filter), [products, filter]);
   const filtering = filter.name || filter.lowStockOnly;
+
+  // The declarative tool is defined by markup, so for a non-admin the form
+  // must not render at all — there is no registration call to withhold.
+  if (guard !== 'allowed') {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-ground">
+        <p className="text-sm text-slate-400">Loading…</p>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-ground p-4 md:p-6">

@@ -95,6 +95,25 @@ This matters because the deployed demo is a public URL. Anyone's agent can call
 these tools, so the blast radius of a bad or malicious call is capped at "an
 expense row you can delete, or a cart you can clear."
 
+### The tool surface itself is scoped to the role
+
+Row Level Security already stops a cashier reading the shop's takings — the
+queries behind `/admin` come back empty for them. But *"the call fails"* is a
+weaker guarantee than *"the tool was never offered."* An agent that can see
+`log_expense` in its tool list will try it, and the failure it gets back still
+tells it something about a page it shouldn't have been on.
+
+So no page registers anything until it has confirmed the role of the session it
+is running in (`lib/useRoleGuard.js`). A cashier who navigates to `/admin` is
+redirected, and their agent is never shown the admin tools in the first place.
+On `/admin/products` that means withholding the *markup*, because the
+declarative tool is the form — there is no registration call to skip.
+
+The result is the property the whole design rests on: **an agent gets exactly
+the permissions of the human whose session it is borrowing**, because it is
+that human's session, and the tool list is derived from it rather than
+defended after the fact.
+
 ### One source of truth, and a receipt for everything
 
 Every tool calls the same query functions in `lib/queries.js` that render the

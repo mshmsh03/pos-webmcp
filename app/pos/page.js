@@ -6,9 +6,11 @@ import { supabase } from '../../lib/supabaseClient';
 import { getAllProducts } from '../../lib/queries';
 import { createCartApi } from '../../lib/cart';
 import { registerCashierTools } from '../../lib/webmcpTools';
+import { useRoleGuard } from '../../lib/useRoleGuard';
 
 export default function PosPage() {
   const router = useRouter();
+  const { status: guard } = useRoleGuard('any');
   const [products, setProducts] = useState([]);
   const [cart, setCart] = useState([]); // [{ product, quantity }]
   const [loading, setLoading] = useState(true);
@@ -35,8 +37,9 @@ export default function PosPage() {
   }, [cart]);
 
   useEffect(() => {
+    if (guard !== 'allowed') return;
     load();
-  }, []);
+  }, [guard]);
 
   // --------------------------------------------------------------------------
   // The cart API handed to the WebMCP layer.
@@ -69,6 +72,7 @@ export default function PosPage() {
   // tools above. Registration is feature-detected — with no WebMCP in the
   // browser this is a no-op and the register behaves exactly as it always did.
   useEffect(() => {
+    if (guard !== 'allowed') return undefined;
     let unregister = () => {};
 
     (async () => {
@@ -81,7 +85,7 @@ export default function PosPage() {
     })();
 
     return () => unregister();
-  }, [cartApi]);
+  }, [cartApi, guard]);
 
   async function load() {
     setLoading(true);

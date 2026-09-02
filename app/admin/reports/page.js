@@ -3,16 +3,19 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getReportsData, logExpense } from '../../../lib/queries';
+import { useRoleGuard } from '../../../lib/useRoleGuard';
 
 export default function ReportsPage() {
+  const { status: guard } = useRoleGuard('admin');
   const [period, setPeriod] = useState('today');
   const [data, setData] = useState(null);
   const [expense, setExpense] = useState({ description: '', amount: '', category: 'general' });
   const [message, setMessage] = useState('');
 
   useEffect(() => {
+    if (guard !== 'allowed') return;
     load(period);
-  }, [period]);
+  }, [period, guard]);
 
   async function load(p) {
     setData(await getReportsData(p));
@@ -28,6 +31,14 @@ export default function ReportsPage() {
     } catch (err) {
       setMessage(`Error: ${err.message}`);
     }
+  }
+
+  if (guard !== 'allowed') {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-ground">
+        <p className="text-sm text-slate-400">Loading…</p>
+      </main>
+    );
   }
 
   return (

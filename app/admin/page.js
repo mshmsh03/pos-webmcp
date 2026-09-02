@@ -6,9 +6,11 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 import { getSalesSummary, getLowStockAlerts, getRecentSales, getRecentToolCalls } from '../../lib/queries';
 import { registerAdminTools, isWebMCPSupported } from '../../lib/webmcpTools';
+import { useRoleGuard } from '../../lib/useRoleGuard';
 
 export default function AdminDashboard() {
   const router = useRouter();
+  const { status: guard } = useRoleGuard('admin');
   const [summary, setSummary] = useState(null);
   const [lowStock, setLowStock] = useState([]);
   const [recentSales, setRecentSales] = useState([]);
@@ -31,15 +33,19 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => {
+    if (guard !== 'allowed') return;
     (async () => {
       setLoading(true);
       await refresh();
       setLoading(false);
     })();
-  }, [refresh]);
+  }, [refresh, guard]);
 
   // --- WebMCP: register this page's tools once, unregister on unmount. ---
   useEffect(() => {
+    // Not just "don't show the data" — don't offer the tools at all until we
+    // know this session belongs to an admin. See lib/useRoleGuard.js.
+    if (guard !== 'allowed') return undefined;
     let unregister = () => {};
 
     (async () => {
@@ -55,14 +61,14 @@ export default function AdminDashboard() {
     })();
 
     return () => unregister();
-  }, [refresh]);
+  }, [refresh, guard]);
 
   async function signOut() {
     await supabase.auth.signOut();
     router.replace('/login');
   }
 
-  if (loading) {
+  if (guard !== 'allowed' || loading) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-ground">
         <p className="text-sm text-slate-400">Loading…</p>
